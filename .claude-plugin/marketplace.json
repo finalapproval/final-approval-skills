@@ -1,0 +1,28 @@
+{
+  "name": "final-approval-skills",
+  "owner": {
+    "name": "FinalApproval"
+  },
+  "metadata": {
+    "description": "Community-built skills for Claude Code — code review, productivity tools, and more",
+    "version": "0.1.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "code-reviewer",
+      "source": "./plugins/code-reviewer",
+      "description": "Perform a thorough code review on staged changes or a specific file, checking for bugs, security issues, and style"
+    },
+    {
+      "name": "example-greeting",
+      "source": "./plugins/example-greeting",
+      "description": "Generate a friendly greeting message for a project README or onboarding flow"
+    },
+    {
+      "name": "create-channel",
+      "source": "./plugins/create-channel",
+      "description": "Create a FinalApproval channel to add human-in-the-loop approval to your AI agent workflows"
+    }
+  ]
+}
