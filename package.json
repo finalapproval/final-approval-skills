@@ -1,13 +1,13 @@
 {
   "name": "final-approval-skills",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Community skills for Claude Code, Cursor, Windsurf, and Codex — powered by FinalApproval",
   "bin": {
     "final-approval-skills": "./bin/install.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/finalapproval/final-approval-skills"
+    "url": "git+https://github.com/pmccurley87/final-approval-skills.git"
   },
   "keywords": ["claude", "claude-code", "cursor", "windsurf", "codex", "ai-skills", "ai-tools"],
   "license": "MIT"

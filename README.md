@@ -1,27 +1,14 @@
 # FinalApproval Skills
 
-Community-built skills for AI coding tools.
+Skills for adding human-in-the-loop approval to AI agent workflows.
 
 ## Install
 
 ### Claude Code (recommended)
 
-Install from the Claude marketplace:
-
 ```
-code-reviewer@final-approval-skills
-example-greeting@final-approval-skills
-```
-
-Enable in your project's `.claude/settings.json`:
-
-```json
-{
-  "enabledPlugins": {
-    "code-reviewer@final-approval-skills": true,
-    "example-greeting@final-approval-skills": true
-  }
-}
+/plugin marketplace add pmccurley87/final-approval-skills
+/plugin install create-channel@final-approval-skills
 ```
 
 ### All tools (npx)
@@ -42,8 +29,7 @@ npx final-approval-skills --global
 
 | Skill | Description |
 |---|---|
-| `code-reviewer` | Structured code review for staged changes or files |
-| `example-greeting` | Generate a greeting message for READMEs or onboarding |
+| `create-channel` | Create a FinalApproval channel to gate an agent action behind human approval |
 
 ## Contributing a Skill
 
@@ -66,24 +52,6 @@ argument-hint: [what arguments the skill accepts]
 
 Instructions for the AI to follow when this skill is invoked.
 ```
-
-### Directory structure for a skill
-
-```
-skills/my-skill/
-├── SKILL.md              # Required — skill definition
-└── templates/            # Optional — reference files
-    └── example.md
-```
-
-The marketplace plugin structure (`plugins/`) is maintained by the FinalApproval team — contributors only need to add to `skills/`.
-
-### Guidelines
-
-- Keep skills focused — one skill, one job
-- Write clear, step-by-step instructions
-- Include example output where helpful
-- Test with at least one AI tool before submitting
 
 ## License
 
