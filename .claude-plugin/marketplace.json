@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Skills for adding human-in-the-loop approval to AI agent workflows",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "pluginRoot": "./plugins"
   },
   "plugins": [
     {
-      "name": "create-channel",
-      "source": "./plugins/create-channel",
-      "description": "Create a FinalApproval channel to add human-in-the-loop approval to your AI agent workflows"
+      "name": "finalapproval",
+      "source": "./plugins/finalapproval",
+      "description": "FinalApproval skills — human-in-the-loop approval for AI agent workflows"
     }
   ]
 }
