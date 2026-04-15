@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="0.7">
       <stop offset="0%" stop-color="#f7f6f2"/>
-      <stop offset="100%" stop-color="#edecea"/>
+      <stop offset="100%" stop-color="#f2f1ed"/>
     </linearGradient>
     <filter id="shadow" x="-4%" y="-4%" width="108%" height="116%">
       <feDropShadow dx="0" dy="4" stdDeviation="12" flood-color="#000000" flood-opacity="0.08"/>
@@ -143,6 +143,4 @@
     </g>
   </g>
 
-  <!-- Bottom accent line -->
-  <rect x="0" y="712" width="1280" height="8" fill="#f54e00"/>
 </svg>
