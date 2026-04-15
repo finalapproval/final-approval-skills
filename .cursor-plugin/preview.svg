@@ -144,5 +144,5 @@
   </g>
 
   <!-- Bottom accent line -->
-  <rect x="0" y="704" width="1280" height="16" fill="#f54e00"/>
+  <rect x="0" y="712" width="1280" height="8" fill="#f54e00"/>
 </svg>
