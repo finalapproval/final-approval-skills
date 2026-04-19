@@ -10,47 +10,27 @@ Wire human-in-the-loop approval into an agent's action. The end result: the agen
 
 ## Steps
 
-### 1. Scope the channel — minimal questions, smart defaults
+### 1. Scope the channel
 
-Only ask what actually changes the code. Everything else, infer or pick a sensible default and move on.
+To proceed you need three things. Get them however makes sense — read the codebase, infer from context, batch a question, ask one thing, propose a default and let the user correct. Use judgement.
 
-**Q1 — Pick the action type** (single multiple-choice question):
+**What you actually need:**
 
-> "What kind of action are we gating? Pick one:
-> **a)** Send email / messaging
-> **b)** Deploy / infra change
-> **c)** Charge / refund / financial
-> **d)** Post to social / publish content
-> **e)** Database migration / destructive query
-> **f)** Other (describe in one line)"
+1. **The action being gated** — concrete enough to name the channel and pick a card layout. "Send transactional emails" is enough; "stuff" is not.
+2. **The runtime data fields** — the values that change per request. These define the TypeScript interface, the HTML template, and the webhook payload contract. If the action exists in the codebase, infer them from the function signature and only confirm.
+3. **The webhook destination** — a publicly reachable HTTPS URL. If the user doesn't have one, help them get one (existing route, tunnel, scaffold, or serverless function) — see step 3.
 
-Each choice maps to a preset: channel name, description, TypeScript interface, and HTML card template. The presets are in the appendix. **Use them as-is** unless the user picks (f) or pushes back.
+**What you don't need (don't ask):**
 
-**Q2 — Confirm data fields** (only if needed):
+- Why approval is needed, who's reviewing, how often it fires, blast radius — none of these change the code. They're dashboard/notification settings the user can tune later.
+- Trigger location — grep for it. Only ask if grep is genuinely ambiguous.
+- Channel name, card styling, port numbers — pick a sensible default and move on. The user will correct you if they care.
 
-Show the preset's data fields and ask one question:
+**Style:**
 
-> "I'll send these fields with each approval: `recipient`, `subject`, `body`, `priority`. **Add or remove any?** (reply 'looks good' to accept)"
-
-If they accept, move on. If they edit, update the interface and HTML template — don't re-ask anything else.
-
-**Q3 — Webhook destination** (multiple choice):
-
-> "Where will FinalApproval POST the approval decision? Pick one:
-> **a)** I have a public HTTPS URL ready (paste it)
-> **b)** Local dev — set up an ngrok / cloudflared tunnel
-> **c)** No web server — scaffold a tiny Express receiver in this project
-> **d)** Serverless (Vercel / Cloudflare Workers / Lambda)"
-
-Their choice drives step 7's scaffolding. No follow-up questions — pick a default port (3000) and route (`/webhooks/finalapproval`) and run with it.
-
-**Don't ask about:**
-- *Why* approval is needed — doesn't change the code
-- Reviewer persona — the preset templates already render well for both technical and non-technical reviewers
-- Frequency / urgency — doesn't affect channel creation; notification settings live in the dashboard
-- Trigger location — `Grep` the codebase for the action's function call (e.g. `sendEmail(`, `deployService(`, `stripe.charges.create`) and surface candidates. Only ask if grep returns zero or many ambiguous matches.
-
-**Don't summarize back** unless something is genuinely ambiguous. Move straight to step 2.
+- Prefer one batched message over a chatty back-and-forth. If you can ask everything you need in one short message (or none, by inferring from the repo), do that.
+- Multiple choice when the answer space is small and well-known. Open-ended only when MC would be artificial.
+- Propose, don't interrogate. "I see `sendEmail()` in `src/email.ts` — gating that one with fields `to/subject/body/priority`. Webhook URL?" beats a six-question form.
 
 ### 2. Authenticate (device flow)
 
