@@ -10,20 +10,58 @@ Wire human-in-the-loop approval into an agent's action. The end result: the agen
 
 ## Steps
 
-### 1. Understand the action being gated
+### 1. Discovery — design the channel before creating it
 
-Ask the developer: **what action needs human approval before it runs?**
+A well-designed channel makes approve/deny decisions fast and confident. A poorly-designed one buries the reviewer in noise or hides the critical detail. Spend time here — it pays off every time the channel fires.
 
-Identify:
-- **The action** — what happens after approval (send email, deploy, charge card, publish post)
-- **The data** — what runtime values describe the action (recipient, amount, content, etc.)
-- **The trigger** — where in the codebase the action is initiated (an API route, a cron job, a queue consumer, an agent tool call)
+Ask the developer these questions, **one at a time**, and wait for each answer before moving on. Don't dump them all at once.
 
-Common examples:
-- Send email → recipient, subject, body, priority
-- Deploy to production → service, environment, commit, diff
-- Charge customer → customer, amount, currency, description
-- Post to social media → platform, content, images, schedule
+**1a. The action**
+
+> "What's the action that needs human approval before it runs?"
+
+Get specific. Not "email stuff" — *"send marketing campaign emails to our subscriber list"*. Not "deploys" — *"deploy the api-gateway service to production"*.
+
+**1b. Why approval is needed**
+
+> "What's the worst thing that happens if this runs without review?"
+
+This shapes how prominent the warning indicators should be. A wrong email to one person ≠ a wrong charge to 10,000 customers ≠ a bad deploy that takes prod down.
+
+**1c. The reviewer's perspective**
+
+> "Who's approving these — you, a teammate, a non-technical stakeholder? And what do they need to see to confidently say yes or no?"
+
+A developer reviewer can read a JSON diff. A marketing lead needs the rendered email preview. A finance approver wants the customer name and dollar amount front and center, not a transaction ID.
+
+**1d. The runtime data**
+
+> "What values change every time the action runs? List them out — I'll use these to build the approval card and the webhook payload."
+
+Examples by action type:
+- **Send email** → recipient, subject, body, priority, audience size
+- **Deploy to production** → service, environment, commit SHA, diff summary, test results
+- **Charge customer** → customer name, amount, currency, description, invoice link
+- **Post to social media** → platform, content, images, scheduled time
+- **Run database migration** → SQL, affected tables, estimated rows, reversibility
+
+**1e. Frequency and urgency**
+
+> "How often will this fire, and how quickly do approvals usually need a response?"
+
+Once a week vs. 50 times a day changes the channel name, description, and whether the reviewer needs Slack/email notifications enabled.
+
+**1f. The trigger location**
+
+> "Where in the codebase does this action currently get triggered? An API route, a cron job, a queue consumer, an agent tool call?"
+
+You need this to know where to drop in the `submitForApproval` call later.
+
+**Summarize back what you heard** before moving on:
+
+> "Sounds like: a channel called *Production Deploys* — gates `deployService()` in `src/deploy/runner.ts`. Reviewers (you + the on-call engineer) need to see service name, commit SHA, diff stats, and test results to decide. Fires ~5x/week, usually needs a decision within 30 minutes. Sound right?"
+
+If they correct anything, update your understanding before continuing.
 
 ### 2. Authenticate (device flow)
 
@@ -31,24 +69,31 @@ The rest of this skill needs a bearer token. Tokens are stored at `~/.finalappro
 
 The default host is `https://www.finalapproval.ai`. Override with `FINALAPPROVAL_URL` (e.g. `http://localhost:3001` for local dev).
 
-**2a. Check for an existing session:**
+**2a. Check for an existing session — and offer to switch accounts:**
 
 ```bash
 FINALAPPROVAL_URL="${FINALAPPROVAL_URL:-https://www.finalapproval.ai}"
 
+CURRENT_EMAIL=""
 if [ -f ~/.finalapproval/token.json ]; then
   TOKEN=$(jq -r .token ~/.finalapproval/token.json)
-  # Verify it still works
-  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $TOKEN" \
-    "$FINALAPPROVAL_URL/api/channels")
-  [ "$STATUS" = "200" ] && echo "session ok" || rm ~/.finalapproval/token.json
+  # Verify it still works and get the signed-in user
+  SESSION=$(curl -s -H "Authorization: Bearer $TOKEN" \
+    -H "Origin: $FINALAPPROVAL_URL" \
+    "$FINALAPPROVAL_URL/api/auth/get-session")
+  CURRENT_EMAIL=$(echo "$SESSION" | jq -r '.user.email // empty')
+  [ -z "$CURRENT_EMAIL" ] && rm ~/.finalapproval/token.json
 fi
 ```
 
-If the file is missing, invalid, or the verify call returns 401, continue to 2b.
+If a valid session exists, **always ask** the developer whether to continue as `$CURRENT_EMAIL` or switch accounts. Do not silently reuse the session.
 
-**2b. Request a device code:**
+- If they want to continue → skip to step 3.
+- If they want to switch → `rm ~/.finalapproval/token.json` and fall through to 2b. The device flow starts fresh, no extra confirmation.
+
+If no valid session exists, continue to 2b directly.
+
+**2b. Request a device code and open the browser:**
 
 Better Auth exposes an OAuth 2.0 device-authorization flow under `/api/auth/device/*`.
 
@@ -63,11 +108,22 @@ RESP=$(curl -s -X POST "$FINALAPPROVAL_URL/api/auth/device/code" \
 DEVICE_CODE=$(echo "$RESP" | jq -r .device_code)
 URL=$(echo "$RESP" | jq -r .verification_uri_complete)
 INTERVAL=$(echo "$RESP" | jq -r .interval)
+
+# Always print the URL so the developer can copy-paste if auto-open fails.
+echo "Open this URL to approve: $URL"
+
+# Always try to auto-open a browser. Best-effort — never fail the flow if it doesn't work.
+( xdg-open "$URL" >/dev/null 2>&1 \
+  || open "$URL" >/dev/null 2>&1 \
+  || python3 -m webbrowser "$URL" >/dev/null 2>&1 \
+  || true ) &
 ```
 
-Show the developer `$URL` and ask them to open it in a browser. They'll sign in if needed, then click "Approve and connect".
+The browser open is best-effort. The URL is printed regardless — developer can copy-paste on headless machines or if the opener fails. Do not pause, do not prompt "press enter when ready". Continue directly to 2c.
 
-**2c. Poll for the token:**
+**2c. Poll for the token (never pause, never prompt):**
+
+Start polling immediately. The loop below handles all RFC 8628 states without any user interaction — the developer signs in in the browser whenever they're ready, and the next poll picks up the new token.
 
 ```bash
 while true; do
@@ -98,11 +154,40 @@ while true; do
 done
 ```
 
+Never insert a `read`, `wait`, or "press any key" step here. The poll loop IS the wait — it resolves the moment the developer finishes signing in.
+
 All future API calls in this skill use `Authorization: Bearer $TOKEN`.
 
-### 3. Create the channel
+### 3. Determine the webhook URL — required
 
-If the developer already knows their webhook URL, include it now. Otherwise, skip it — webhooks can be added later from the channel settings page.
+**This skill always closes the loop with a webhook.** Polling for approval status is brittle, doesn't scale, and means the gated action runs in a different process than the one that submitted it. A webhook keeps the submission and execution paths in the same codebase, makes the flow event-driven, and lets the agent react instantly to denials.
+
+Ask the developer:
+
+> "Where should FinalApproval send the approval decision? I need a publicly reachable HTTPS URL — usually something like `https://your-app.com/webhooks/finalapproval`."
+
+Three scenarios:
+
+**3a. They have a hosted app with a public URL** — great. Use `<their-domain>/webhooks/finalapproval` (or wherever fits their existing webhook routing). Confirm the URL is HTTPS and reachable from the public internet.
+
+**3b. They're developing locally and need to expose localhost** — recommend a tunnel:
+- **ngrok** — `ngrok http 3000`, copy the `https://*.ngrok-free.app` URL
+- **cloudflared** — `cloudflared tunnel --url http://localhost:3000`
+- **Tailscale Funnel** — if they already use Tailscale
+
+Tell them: *"Use the tunnel URL while developing. Update the channel's webhook URL to your production URL when you deploy — you can change it anytime in the dashboard without losing the channel."*
+
+**3c. They have no server at all (e.g. CLI tool, script, agent without a web server)** — they need one. Talk them through the lightest option:
+
+- **For a one-off agent or script:** stand up a minimal Express/Fastify/Hono server (20 lines) just to receive the webhook. We'll scaffold it in step 6.
+- **For a deployed agent without HTTP:** use a serverless function (Vercel, Cloudflare Workers, AWS Lambda Function URL, Deno Deploy) — single file, public URL, no server to manage.
+- **For something running in a queue/cron context:** the webhook handler can write to the same database/queue the agent reads from, so the action resumes on the next tick.
+
+If they're unsure which approach fits, ask: *"Where does this code run today — a long-lived server, a serverless function, a one-shot script, or a queue worker?"* Then recommend the matching option.
+
+**Don't proceed until you have a webhook URL.** It's part of the channel from day one.
+
+### 4. Create the channel
 
 ```bash
 TOKEN=$(jq -r .token ~/.finalapproval/token.json)
@@ -121,7 +206,7 @@ Response includes:
 - `api_key` (`fa_...`) — for submitting approvals. **Shown once.**
 - `webhook_secret` (`whsec_...`) — for verifying webhook signatures. Only returned when `webhook_url` is provided. **Shown once.**
 
-### 4. Save channel credentials
+### 5. Save channel credentials
 
 The bearer token already lives at `~/.finalapproval/token.json`. The channel-scoped `fa_` key and webhook secret belong in the **project's** `.env`:
 
@@ -134,11 +219,33 @@ FINALAPPROVAL_API_KEY=fa_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 FINALAPPROVAL_WEBHOOK_SECRET=whsec_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-The webhook secret is only present if a webhook URL was provided in step 3. If not, skip it — it will be generated when the developer adds a webhook later via channel settings.
-
 Both credentials are shown once and cannot be retrieved again. If lost, the API key requires creating a new channel; the webhook secret can be regenerated by updating the webhook URL in channel settings.
 
-### 5. Build the approval submission function
+### 5.5. Seed a sample approval so the developer can test the UI immediately
+
+**Always do this, even before any code is wired up.** The goal is to let the developer see what an approval looks like in the dashboard and practise the approve/deny flow without having to build the submission function first.
+
+Using the `fa_` key just minted, post one sample approval. **Use the actual key returned from step 3** — don't leave a placeholder in the curl.
+
+```bash
+# $API_KEY must be the real fa_... value returned by step 3's channel-create response.
+# Do NOT paste a literal "fa_..." — the request will 401.
+
+curl -s -X POST "$FINALAPPROVAL_URL/api/v1/approvals" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Sample approval — try approving or denying this",
+    "body": "<div class=\"space-y-3\"><div class=\"rounded-lg border p-3\"><p class=\"text-xs text-gray-500\">This is a test</p><p class=\"font-medium\">A real approval from your agent will look like this card. Click Approve or Deny in the dashboard to see the resolution flow — no webhook is required for this test.</p></div><details class=\"rounded-lg border\"><summary class=\"cursor-pointer p-3 font-medium text-sm\">What happens next?</summary><div class=\"border-t p-3 text-sm text-gray-600\">Once you wire up the submission function (step 5), every call will render here. If you configure a webhook (step 6), your code runs the moment you click Approve.</div></details></div>",
+    "data": { "sample": true, "channel": "'"$CHANNEL_NAME"'" }
+  }'
+```
+
+Tell the developer: **open the channel in the dashboard now and click Approve or Deny on the sample card.** This validates end-to-end that the channel works, the body renders correctly, and the resolution UI behaves as expected — all before writing any integration code.
+
+Resolving the sample also exercises the webhook delivery path you configured in step 3 — useful for confirming end-to-end connectivity once step 7 is wired up.
+
+### 6. Build the approval submission function
 
 This is the core integration. Create a single function that:
 1. Builds a consistent HTML body from the action's runtime data
@@ -226,21 +333,28 @@ const approvalId = await submitForApproval({
   priority: "high",
 });
 // Action is now pending — human reviews in dashboard
-// If a webhook is wired (step 6), it fires when the human decides
+// The webhook (step 7) fires when the human decides and runs the real action
 ```
 
-### 6. Wire up the webhook receiver (if webhook is configured)
+### 7. Wire up the webhook receiver — close the loop
 
-**Skip this step if no webhook URL was set in step 3.** The developer can add one later from the channel's settings page in the dashboard, and come back to wire this up then. Without a webhook, the developer would poll `GET /api/v1/approvals/:id` or check the dashboard manually.
+This is the half of the integration that actually *executes the gated action*. Without it, the submission function in step 6 just creates pending requests that nothing acts on. We don't skip this — ever.
 
-When a human approves or denies, FinalApproval POSTs the decision to the webhook URL. **This is where the gated action actually runs.**
+When a human approves or denies, FinalApproval POSTs the decision to the webhook URL configured in step 3. **This is where the gated action actually runs.**
 
 First, search the codebase for existing webhook handlers:
 - Look for routes like `/webhooks`, `/api/hooks`, or similar patterns
-- Check for existing Express/Fastify/Next.js API routes that handle incoming POSTs
-- If a handler exists, add a new route for FinalApproval alongside it
+- Check for existing Express/Fastify/Next.js/Hono API routes that handle incoming POSTs
+- If a handler exists, add a new route for FinalApproval alongside it — match the existing patterns (router, middleware, error handling)
 
-If no webhook infrastructure exists, scaffold a receiver:
+If no webhook infrastructure exists, scaffold a receiver based on what was decided in step 3:
+
+- **Existing server with public URL** — add a new route (snippet below)
+- **Local dev with tunnel (ngrok/cloudflared)** — add the same route to your local server; the tunnel forwards traffic to it
+- **Serverless** — use the platform's HTTP handler signature (Vercel `app/api/webhooks/finalapproval/route.ts`, Cloudflare Worker `fetch()`, Lambda Function URL handler). The verification logic is identical; only the request/response shape differs.
+- **No HTTP at all** — stand up a 20-line Express server in the same project just for this. The function that runs on approval can call into the same module the agent uses.
+
+Express scaffold:
 
 ```typescript
 import crypto from "node:crypto";
@@ -295,7 +409,13 @@ app.post("/webhooks/finalapproval", express.raw({ type: "application/json" }), (
 });
 ```
 
-**The webhook handler closes the loop.** The submission function (step 5) sends the request; the webhook handler (this step) receives the decision and runs the action. Both use `approval.data` as the shared contract — the structured JSON that carries the runtime values through the approval flow.
+**The webhook handler closes the loop.** The submission function (step 6) sends the request; the webhook handler (this step) receives the decision and runs the action. Both use `approval.data` as the shared contract — the structured JSON that carries the runtime values through the approval flow.
+
+**Both the approve AND deny paths must be handled.** Approving without handling denials means denied requests silently disappear — the agent has no idea its request was rejected. At minimum, log denials with their `denial_reason`. Better: surface them back to the caller (return an error, write to a status table, notify the agent's session) so the agent can adapt — retry with corrections, escalate, or abandon the task.
+
+#### Idempotency
+
+FinalApproval may retry webhook deliveries on failure (network blips, 5xx responses). Make the handler idempotent: track which `approval.id`s you've already processed (a Set in memory for ephemeral handlers, a DB row for persistent ones) and skip duplicates. Otherwise an approved deploy could run twice.
 
 #### Webhook payload schema
 
@@ -323,21 +443,16 @@ Security headers on every delivery:
 - `X-FinalApproval-Signature-256: sha256=<hmac_hex>` — HMAC-SHA256 of `timestamp.body`
 - `X-FinalApproval-Timestamp: <unix_seconds>` — reject if older than 5 minutes
 
-### 7. Verify the setup
+### 8. Verify the full loop end-to-end
 
-Walk the developer through confirmation:
+Walk the developer through confirmation. **All of these must pass — the loop isn't closed until they do.**
 
 1. **Channel is live** — visible at the FinalApproval dashboard
 2. **Submission works** — trigger the action in the codebase, confirm it appears as a pending approval in the dashboard
 3. **Body renders correctly** — the HTML template displays the runtime data clearly in the approval card
-
-If a webhook is configured, also verify:
-
-4. **Webhook fires** — approve the request in the dashboard, confirm the webhook handler receives it and executes the action
-5. **Denial works** — deny a request with a reason, confirm the handler receives `denial_reason` and handles it
-6. **Test from settings** — open the channel settings in the dashboard and click "Test" to send a synthetic webhook delivery
-
-If no webhook is configured yet, let the developer know they can add one later from channel settings. Until then, they can check approval status by polling or reviewing the dashboard.
+4. **Webhook fires on approval** — approve the request in the dashboard, confirm the webhook handler receives it (check logs) and executes the action (the email actually sends, the deploy actually runs)
+5. **Webhook fires on denial** — deny a request with a reason, confirm the handler receives `denial_reason` and the action is *not* executed
+6. **Test from settings** — open the channel settings in the dashboard and click "Test" to send a synthetic webhook delivery. Confirm signature verification passes
 
 If any step fails, check:
 - `~/.finalapproval/token.json` exists and the token still works (re-run step 2 if not)
