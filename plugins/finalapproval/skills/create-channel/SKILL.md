@@ -10,58 +10,47 @@ Wire human-in-the-loop approval into an agent's action. The end result: the agen
 
 ## Steps
 
-### 1. Discovery — design the channel before creating it
+### 1. Scope the channel — minimal questions, smart defaults
 
-A well-designed channel makes approve/deny decisions fast and confident. A poorly-designed one buries the reviewer in noise or hides the critical detail. Spend time here — it pays off every time the channel fires.
+Only ask what actually changes the code. Everything else, infer or pick a sensible default and move on.
 
-Ask the developer these questions, **one at a time**, and wait for each answer before moving on. Don't dump them all at once.
+**Q1 — Pick the action type** (single multiple-choice question):
 
-**1a. The action**
+> "What kind of action are we gating? Pick one:
+> **a)** Send email / messaging
+> **b)** Deploy / infra change
+> **c)** Charge / refund / financial
+> **d)** Post to social / publish content
+> **e)** Database migration / destructive query
+> **f)** Other (describe in one line)"
 
-> "What's the action that needs human approval before it runs?"
+Each choice maps to a preset: channel name, description, TypeScript interface, and HTML card template. The presets are in the appendix. **Use them as-is** unless the user picks (f) or pushes back.
 
-Get specific. Not "email stuff" — *"send marketing campaign emails to our subscriber list"*. Not "deploys" — *"deploy the api-gateway service to production"*.
+**Q2 — Confirm data fields** (only if needed):
 
-**1b. Why approval is needed**
+Show the preset's data fields and ask one question:
 
-> "What's the worst thing that happens if this runs without review?"
+> "I'll send these fields with each approval: `recipient`, `subject`, `body`, `priority`. **Add or remove any?** (reply 'looks good' to accept)"
 
-This shapes how prominent the warning indicators should be. A wrong email to one person ≠ a wrong charge to 10,000 customers ≠ a bad deploy that takes prod down.
+If they accept, move on. If they edit, update the interface and HTML template — don't re-ask anything else.
 
-**1c. The reviewer's perspective**
+**Q3 — Webhook destination** (multiple choice):
 
-> "Who's approving these — you, a teammate, a non-technical stakeholder? And what do they need to see to confidently say yes or no?"
+> "Where will FinalApproval POST the approval decision? Pick one:
+> **a)** I have a public HTTPS URL ready (paste it)
+> **b)** Local dev — set up an ngrok / cloudflared tunnel
+> **c)** No web server — scaffold a tiny Express receiver in this project
+> **d)** Serverless (Vercel / Cloudflare Workers / Lambda)"
 
-A developer reviewer can read a JSON diff. A marketing lead needs the rendered email preview. A finance approver wants the customer name and dollar amount front and center, not a transaction ID.
+Their choice drives step 7's scaffolding. No follow-up questions — pick a default port (3000) and route (`/webhooks/finalapproval`) and run with it.
 
-**1d. The runtime data**
+**Don't ask about:**
+- *Why* approval is needed — doesn't change the code
+- Reviewer persona — the preset templates already render well for both technical and non-technical reviewers
+- Frequency / urgency — doesn't affect channel creation; notification settings live in the dashboard
+- Trigger location — `Grep` the codebase for the action's function call (e.g. `sendEmail(`, `deployService(`, `stripe.charges.create`) and surface candidates. Only ask if grep returns zero or many ambiguous matches.
 
-> "What values change every time the action runs? List them out — I'll use these to build the approval card and the webhook payload."
-
-Examples by action type:
-- **Send email** → recipient, subject, body, priority, audience size
-- **Deploy to production** → service, environment, commit SHA, diff summary, test results
-- **Charge customer** → customer name, amount, currency, description, invoice link
-- **Post to social media** → platform, content, images, scheduled time
-- **Run database migration** → SQL, affected tables, estimated rows, reversibility
-
-**1e. Frequency and urgency**
-
-> "How often will this fire, and how quickly do approvals usually need a response?"
-
-Once a week vs. 50 times a day changes the channel name, description, and whether the reviewer needs Slack/email notifications enabled.
-
-**1f. The trigger location**
-
-> "Where in the codebase does this action currently get triggered? An API route, a cron job, a queue consumer, an agent tool call?"
-
-You need this to know where to drop in the `submitForApproval` call later.
-
-**Summarize back what you heard** before moving on:
-
-> "Sounds like: a channel called *Production Deploys* — gates `deployService()` in `src/deploy/runner.ts`. Reviewers (you + the on-call engineer) need to see service name, commit SHA, diff stats, and test results to decide. Fires ~5x/week, usually needs a decision within 30 minutes. Sound right?"
-
-If they correct anything, update your understanding before continuing.
+**Don't summarize back** unless something is genuinely ambiguous. Move straight to step 2.
 
 ### 2. Authenticate (device flow)
 
@@ -158,34 +147,18 @@ Never insert a `read`, `wait`, or "press any key" step here. The poll loop IS th
 
 All future API calls in this skill use `Authorization: Bearer $TOKEN`.
 
-### 3. Determine the webhook URL — required
+### 3. Lock in the webhook URL
 
-**This skill always closes the loop with a webhook.** Polling for approval status is brittle, doesn't scale, and means the gated action runs in a different process than the one that submitted it. A webhook keeps the submission and execution paths in the same codebase, makes the flow event-driven, and lets the agent react instantly to denials.
+You already know the choice from Q3 in step 1. Resolve it to a concrete URL:
 
-Ask the developer:
+| Choice from Q3 | Action |
+|---|---|
+| **(a)** Public URL provided | Use it directly. Verify it's HTTPS. |
+| **(b)** Local + tunnel | Run `ngrok http 3000` (or `cloudflared tunnel --url http://localhost:3000`), capture the `https://*.ngrok-free.app` URL, append `/webhooks/finalapproval`. Tell them they can update to the production URL later from channel settings — the channel survives the swap. |
+| **(c)** Scaffold Express | Use `http://localhost:3000/webhooks/finalapproval` only as a placeholder; immediately set up a tunnel (ngrok) to expose it. Without a public URL the channel can't deliver. |
+| **(d)** Serverless | Deploy the route first (Vercel `app/api/webhooks/finalapproval/route.ts`, Cloudflare Worker, etc.), capture the deployed URL, use that. |
 
-> "Where should FinalApproval send the approval decision? I need a publicly reachable HTTPS URL — usually something like `https://your-app.com/webhooks/finalapproval`."
-
-Three scenarios:
-
-**3a. They have a hosted app with a public URL** — great. Use `<their-domain>/webhooks/finalapproval` (or wherever fits their existing webhook routing). Confirm the URL is HTTPS and reachable from the public internet.
-
-**3b. They're developing locally and need to expose localhost** — recommend a tunnel:
-- **ngrok** — `ngrok http 3000`, copy the `https://*.ngrok-free.app` URL
-- **cloudflared** — `cloudflared tunnel --url http://localhost:3000`
-- **Tailscale Funnel** — if they already use Tailscale
-
-Tell them: *"Use the tunnel URL while developing. Update the channel's webhook URL to your production URL when you deploy — you can change it anytime in the dashboard without losing the channel."*
-
-**3c. They have no server at all (e.g. CLI tool, script, agent without a web server)** — they need one. Talk them through the lightest option:
-
-- **For a one-off agent or script:** stand up a minimal Express/Fastify/Hono server (20 lines) just to receive the webhook. We'll scaffold it in step 6.
-- **For a deployed agent without HTTP:** use a serverless function (Vercel, Cloudflare Workers, AWS Lambda Function URL, Deno Deploy) — single file, public URL, no server to manage.
-- **For something running in a queue/cron context:** the webhook handler can write to the same database/queue the agent reads from, so the action resumes on the next tick.
-
-If they're unsure which approach fits, ask: *"Where does this code run today — a long-lived server, a serverless function, a one-shot script, or a queue worker?"* Then recommend the matching option.
-
-**Don't proceed until you have a webhook URL.** It's part of the channel from day one.
+**Don't proceed until you have a publicly reachable HTTPS URL.** It's part of the channel from day one — polling is not an option.
 
 ### 4. Create the channel
 
