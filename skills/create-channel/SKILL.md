@@ -30,6 +30,8 @@ This matters because:
 
 Keep this model in mind through every step below.
 
+> **A note on the dashboard card:** Every approval in this channel will look the same except for the data — so the template you write is the channel's identity in the FinalApproval dashboard. Treat it as a real design surface, not a data form. See step 6 for direction.
+
 ## Steps
 
 ### 1. Scope the channel
@@ -291,11 +293,129 @@ Resolving the sample also exercises the webhook delivery path you configured in 
 ### 6. Build the approval submission function
 
 This is the core integration. Create a single function that:
-1. Builds a consistent HTML body from the action's runtime data
+1. Builds an HTML body that helps a human make a confident decision in 5 seconds
 2. Includes the structured data for programmatic use in the webhook
 3. Posts to the FinalApproval API
 
-**The HTML body is a template defined once in code.** Every approval in this channel will look the same — only the data values change. Design the template for the specific use case identified in step 1.
+The HTML body is a **design opportunity, not a data dump**. Every approval card in this channel will use the same template — only the values change. Design it like you'd design a real product surface for the reviewer: this is the only thing they see before saying yes or no.
+
+#### Pick an aesthetic direction first — don't default
+
+Before writing markup, commit to a direction that fits the action being gated:
+
+| Action gated                     | Suggested tone         | What that means visually                                                                             |
+|----------------------------------|------------------------|------------------------------------------------------------------------------------------------------|
+| Outbound email / customer reply  | Editorial, letter-like | Serif body, branded letterhead strip, sender card, generous spacing                                  |
+| Production deploy / infra change | Console / terminal     | Monospace, dark-on-light or terminal-green, inline diff, severity badge top-right                    |
+| Refund / billing / payout        | Receipt                | Cardstock background, dotted dividers, currency formatting bold and large, side-by-side before/after |
+| Content publish / social post    | Social card mock       | Simulate the destination platform's card so the reviewer sees what users will see                    |
+| Bulk action (N items)            | Roster                 | Compact list with per-item status pills + summary stats header                                       |
+| Tool/agent action                | Diagnostic             | Step list, inputs/outputs blocks, "what could go wrong" section                                      |
+
+If none of those fit, invent your own — but commit. A reviewer should be able to glance at the card and instantly recognise what kind of thing they're approving. Generic two-column gray-bordered cards (the default AI aesthetic) are explicitly **not** the target.
+
+#### Make it scannable in this order
+
+1. **Glance (≤1s):** What kind of action is this? (badge / colour / icon / shape)
+2. **Skim (≤5s):** The 2-3 key facts that determine yes/no (recipient, amount, target, scope)
+3. **Drill-down (on demand):** Full payload — put it inside `<details>` so it's there but not noisy
+
+#### Use the full sanitizer-safe palette
+
+Don't limit yourself to gray borders and `text-gray-500`. The sanitizer allows `class`, `href`, `src`, `alt`, `target`, `rel`, `loading` — that's enough for almost everything Tailwind can do:
+
+- **Colour & atmosphere:** `bg-gradient-to-r from-indigo-500 to-violet-500`, `bg-amber-50`, `bg-stone-900 text-stone-100`, ring/shadow utilities
+- **Status pills:** `inline-flex items-center rounded-full bg-emerald-100 text-emerald-800 px-2.5 py-1 text-xs font-medium`
+- **Typography hierarchy:** `font-serif`, `font-mono`, `tracking-tight`, `text-2xl`, `leading-relaxed`
+- **Imagery:** `<img src="https://…" alt="…" loading="lazy" class="rounded-lg">` — HTTPS only, but it works. Use for brand marks, sender avatars (Gravatar), product thumbnails, OG previews.
+- **Structure:** `<details>` for progressive disclosure, `<table>` for tabular data, `<blockquote>` for quoted user content, `<hr>` and `<dl>` for receipt-style layouts
+- **Decorative depth:** `shadow-lg`, `ring-1 ring-black/5`, gradient borders via padding tricks, dotted dividers (`border-dashed`), striped backgrounds
+
+#### Add personality where it doesn't compromise the decision
+
+Borrowing the principle "delight amplifies, never blocks": small touches make the dashboard a place reviewers don't dread.
+
+- **Copy with voice:** the title and any framing text should sound like your product, not a form. "Send refund of $240 to Sarah?" beats "Refund approval pending".
+- **Contextual icons via inline emoji** (sanitizer-safe, zero-asset): 📨 outbound mail, 🚢 deploy, 💸 payout, 🧾 invoice, ⚠️ risk, 🟢 healthy, 🔴 blocked. Use sparingly — one per card.
+- **Reward exploration:** in `<details>`, write a `<summary>` that hints at what's inside, not just "Details". E.g. *Why I drafted this reply* or *What changes if you approve*.
+- **Empathy on the deny path:** include a one-line note about what happens on denial so the reviewer doesn't feel they're blocking an unstoppable train.
+
+Match intensity to context: a payments approval should feel calm and precise (subtle sophistication); a content publish can be playful. Banking ≠ gaming.
+
+#### Three contrasting examples — pick one as a starting point, then make it yours
+
+These are deliberately different so you don't anchor on a single look. The aesthetic decision drives the markup, not the other way around.
+
+**Example A — Editorial (outbound email reply).** Picked because the reviewer needs to feel the weight of sending real correspondence in the brand's voice.
+
+```html
+<article class="font-serif bg-white rounded-xl shadow-sm ring-1 ring-stone-200 overflow-hidden">
+  <header class="bg-gradient-to-r from-stone-900 to-stone-700 px-6 py-3 text-stone-100 text-sm tracking-wide">
+    📨 Acme Support · Drafted reply
+  </header>
+  <div class="px-6 py-5 space-y-4">
+    <div class="flex items-center gap-3">
+      <img src="https://www.gravatar.com/avatar/${gravatarHash}?s=64" alt="" class="rounded-full" loading="lazy" />
+      <div>
+        <p class="text-sm text-stone-500">To</p>
+        <p class="font-semibold text-stone-900">${data.recipientName} &lt;${data.recipientEmail}&gt;</p>
+      </div>
+    </div>
+    <h2 class="text-xl tracking-tight text-stone-900">${data.subject}</h2>
+    <blockquote class="leading-relaxed text-stone-800 border-l-2 border-stone-300 pl-4">${data.draftedBody}</blockquote>
+    <details class="text-sm text-stone-600">
+      <summary class="cursor-pointer">Why I drafted this reply</summary>
+      <div class="mt-2">${data.rationale}</div>
+    </details>
+  </div>
+</article>
+```
+
+**Example B — Console / terminal (production deploy).** Picked because deploys live in a CLI mental model — monospace and severity signal carry the meaning faster than prose.
+
+```html
+<div class="bg-stone-900 text-stone-100 font-mono text-sm rounded-lg shadow-lg overflow-hidden">
+  <div class="flex items-center justify-between px-4 py-2 bg-stone-800 border-b border-stone-700">
+    <span>🚢 deploy · <span class="text-emerald-400">${data.service}</span> → <span class="text-amber-300">${data.environment}</span></span>
+    <span class="inline-flex items-center rounded-full bg-amber-500/20 text-amber-300 px-2 py-0.5 text-xs">${data.severity}</span>
+  </div>
+  <pre class="px-4 py-3 leading-relaxed whitespace-pre-wrap">$ git diff ${data.fromSha}..${data.toSha} --stat
+${data.diffStat}
+
+releasing ${data.commitCount} commits across ${data.fileCount} files</pre>
+  <details class="border-t border-stone-700">
+    <summary class="cursor-pointer px-4 py-2 text-stone-300">What changes if you approve</summary>
+    <pre class="px-4 py-3 text-stone-200 whitespace-pre-wrap">${data.changelog}</pre>
+  </details>
+</div>
+```
+
+**Example C — Receipt (refund).** Picked because money decisions deserve the precision and weight of a printed document. Cardstock + dotted dividers + currency hierarchy do that work.
+
+```html
+<div class="bg-amber-50 rounded-lg p-6 ring-1 ring-amber-200/60 max-w-md mx-auto">
+  <div class="flex items-center justify-between text-xs uppercase tracking-widest text-amber-900/70">
+    <span>💸 Refund</span>
+    <span>${data.refundId}</span>
+  </div>
+  <hr class="my-3 border-dashed border-amber-300" />
+  <p class="text-sm text-amber-900/70">Issuing to</p>
+  <p class="font-semibold text-stone-900">${data.customerName}</p>
+  <p class="text-sm text-stone-600">${data.customerEmail}</p>
+  <p class="mt-5 text-5xl font-bold tracking-tight text-stone-900">${data.amountFormatted}</p>
+  <p class="text-xs text-stone-500">against original charge ${data.originalChargeId}</p>
+  <hr class="my-3 border-dashed border-amber-300" />
+  <dl class="grid grid-cols-2 gap-y-1 text-sm">
+    <dt class="text-stone-500">Balance before</dt><dd class="text-right font-mono">${data.balanceBefore}</dd>
+    <dt class="text-stone-500">Balance after</dt><dd class="text-right font-mono font-semibold">${data.balanceAfter}</dd>
+  </dl>
+  <p class="mt-4 text-xs text-stone-500">Denying leaves the original charge intact — no customer notification is sent.</p>
+</div>
+```
+
+#### Wire it up
+
+Whichever direction you pick, the function shape is the same:
 
 ```typescript
 // lib/approval.ts — or wherever makes sense in the project
@@ -308,34 +428,7 @@ interface EmailApprovalData {
 }
 
 async function submitForApproval(data: EmailApprovalData): Promise<string> {
-  const priorityColors = {
-    low: { bg: "bg-gray-100", text: "text-gray-700" },
-    normal: { bg: "bg-blue-100", text: "text-blue-700" },
-    high: { bg: "bg-red-100", text: "text-red-700" },
-  };
-  const pc = priorityColors[data.priority];
-
-  const htmlBody = `
-    <div class="space-y-3">
-      <div class="grid grid-cols-2 gap-3">
-        <div class="rounded-lg border p-3">
-          <p class="text-xs text-gray-500">Recipient</p>
-          <p class="font-semibold">${data.recipient}</p>
-        </div>
-        <div class="rounded-lg border p-3">
-          <p class="text-xs text-gray-500">Priority</p>
-          <span class="inline-flex items-center rounded-full ${pc.bg} px-2 py-1 text-xs font-medium ${pc.text}">${data.priority}</span>
-        </div>
-      </div>
-      <div class="rounded-lg border p-3">
-        <p class="text-xs text-gray-500 mb-1">Subject</p>
-        <p class="font-medium">${data.subject}</p>
-      </div>
-      <details class="rounded-lg border">
-        <summary class="cursor-pointer p-3 font-medium text-sm">Email Body Preview</summary>
-        <div class="border-t p-3 text-sm text-gray-600">${data.body}</div>
-      </details>
-    </div>`;
+  const htmlBody = renderApprovalCard(data); // your chosen template, applied to data
 
   const baseUrl = process.env.FINALAPPROVAL_URL ?? "https://www.finalapproval.ai";
   const response = await fetch(`${baseUrl}/api/v1/approvals`, {
@@ -359,16 +452,8 @@ async function submitForApproval(data: EmailApprovalData): Promise<string> {
 
 **Key rules:**
 - `body` is the HTML template (what the human sees). `data` is structured JSON (what the webhook returns to your code). Always include both.
-- The HTML body is sanitized by DOMPurify on the frontend. Only use allowed tags and attributes (see appendix).
+- The HTML body is sanitized by DOMPurify on the frontend. See Appendix A for what survives — most of Tailwind does — and Appendix B for the strict reference.
 - Design the template so a human can make a confident approve/deny decision from the rendered card alone.
-- **Invest in the template.** This is the only UI the reviewer ever sees for this channel — make it rich, scannable, and alive. Guidance:
-  - **Hierarchy first.** The single most important fact (recipient, amount, target URL, filename) is the largest thing on the card. Supporting metadata recedes.
-  - **Use structure, not paragraphs.** Grids for paired facts, tables for row data, `<dl>`/`<dt>`/`<dd>` for label/value lists. Avoid walls of prose.
-  - **Progressive disclosure.** Long content (email bodies, full diffs, raw payloads, logs) goes inside `<details>` so the card stays glanceable and the reviewer expands only what they need.
-  - **Semantic color via Tailwind classes.** Green for additive/safe, red/amber for destructive/high-risk, neutral grays for metadata. Use badges (`rounded-full`, `px-2 py-1`, `text-xs`) for status, priority, environment.
-  - **Show, don't describe.** A rendered diff beats "updates 3 fields". A thumbnail beats "image attached". A table of changes beats a sentence summarizing them.
-  - **Conditional richness.** Branch the template on `data` — show a warnings block only when warnings exist, a recipient list only when it's >1, a cost breakdown only when money is involved. Empty sections are noise.
-  - **Allowed tag set is generous.** Images (`https://` only), tables, nested details, figures with captions, code blocks, blockquotes — all work. See appendix. Use them.
 - **Consistency across the channel is non-negotiable.** Every caller of this channel goes through this one function. If you find yourself writing a second `submitForApproval` variant, that's a new channel, not a new template.
 
 #### Calling the function
@@ -570,7 +655,23 @@ The goal: **six months from now, a fresh session opening this repo should know �
 
 ---
 
-## Appendix: HTML Sanitization Rules
+## Appendix A: Your creative palette (what survives sanitization)
+
+The sanitizer is permissive — far more than typical "safe HTML" allow-lists. Lead with what you *can* do:
+
+- **Tailwind utilities — full classes-based palette.** Colours (every hue, every shade, gradients via `bg-gradient-to-*`), typography (`font-serif`, `font-mono`, `tracking-*`, `leading-*`, `text-*xl`), layout (flex, grid, space-y, gap), spacing, ring/shadow utilities (`ring-1 ring-black/5`, `shadow-lg`), borders (including `border-dashed`, `border-dotted`), and yes — `animate-pulse`, `animate-spin`, `transition-*` all render.
+- **`<img src="https://…">`** — perfect for brand marks, sender avatars (Gravatar via `https://www.gravatar.com/avatar/<md5>`), product thumbnails, OG previews, screenshots hosted on your CDN. `alt` and `loading="lazy"` are allowed.
+- **`<details>` / `<summary>`** for progressive disclosure — write summaries that hint at what's inside ("What changes if you approve") not just "Details".
+- **`<table>`** for tabular data, `<dl>`/`<dt>`/`<dd>` for label/value pairs, `<blockquote>` for quoted user content, `<figure>`/`<figcaption>` for captioned media.
+- **`<pre>` and `<code>`** for diffs, logs, terminal output, JSON dumps. Combine with `font-mono bg-stone-900 text-stone-100` for a console aesthetic.
+- **Emoji and Unicode** characters render fine and need zero asset hosting. Use sparingly as contextual icons (📨 🚢 💸 ⚠️ 🟢 🔴) — one per card, max.
+- **Nested structure** — there's no depth limit. Layouts as elaborate as a real product surface (header strip + hero figure + side-by-side comparison + collapsible footer) all work.
+
+If you can imagine it as a static HTML email or a marketing card, it almost certainly renders.
+
+## Appendix B: Sanitizer reference (the strict allow-list)
+
+The fence, for when you need precision:
 
 **Allowed tags:** `div`, `span`, `p`, `h1`-`h6`, `ul`, `ol`, `li`, `dl`, `dt`, `dd`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `strong`, `em`, `small`, `code`, `pre`, `blockquote`, `a`, `br`, `hr`, `details`, `summary`, `img`, `figure`, `figcaption`
 
